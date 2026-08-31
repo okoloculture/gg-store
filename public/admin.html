@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Админка — GG Store</title>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/pages.css">
+</head>
+<body class="plain">
+<div class="sheet" style="max-width:1100px">
+  <a class="back" href="/">← Витрина</a>
+  <h1>Админка</h1>
+
+  <div class="toolbar">
+    <input type="password" id="token" placeholder="Токен админки" value="dev-admin-token">
+    <select id="filter">
+      <option value="stuck">Оплачен, но не выдан</option>
+      <option value="delivered">Выданные</option>
+      <option value="created">Ожидают оплаты</option>
+      <option value="payment_failed">Оплата не прошла</option>
+    </select>
+    <button class="btn btn--primary" id="reload" type="button">Обновить</button>
+    <span id="error" class="error"></span>
+  </div>
+
+  <h2>Заказы</h2>
+  <div id="orders">—</div>
+
+  <div class="grid-2">
+    <div>
+      <h2>Остаток пула</h2>
+      <div id="stock">—</div>
+      <div class="toolbar" style="margin-top:12px">
+        <select id="refill-sku"></select>
+        <select id="refill-provider"><option value="A">Поставщик A</option><option value="B">Поставщик B</option></select>
+        <input type="number" id="refill-count" value="5" min="1" max="100" style="width:90px">
+        <button class="btn btn--primary" id="refill" type="button">Пополнить</button>
+        <button class="btn btn--ghost" id="drain" type="button">Осушить (для теста)</button>
+      </div>
+    </div>
+    <div>
+      <h2>Промокоды</h2>
+      <div id="promos">—</div>
+      <h2>Инварианты</h2>
+      <div id="audit">—</div>
+    </div>
+  </div>
+</div>
+<script type="module" src="js/admin.js"></script>
+</body>
+</html>

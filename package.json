@@ -1,0 +1,25 @@
+{
+  "name": "gg-store",
+  "version": "1.0.0",
+  "description": "Магазин цифровых товаров: витрина, заказы, вебхуки оплаты, однократная выдача ключей",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
+    "seed": "node --disable-warning=ExperimentalWarning src/db/seed.js",
+    "reset": "node --disable-warning=ExperimentalWarning src/db/seed.js --reset",
+    "test": "node --disable-warning=ExperimentalWarning --env-file=.env.test --test-concurrency=1 --test tests/*.test.js",
+    "race:all": "node --disable-warning=ExperimentalWarning scripts/run-all.js",
+    "race:webhooks": "node --disable-warning=ExperimentalWarning scripts/race-webhooks.js",
+    "race:buy": "node --disable-warning=ExperimentalWarning scripts/race-buy.js",
+    "race:out-of-order": "node --disable-warning=ExperimentalWarning scripts/race-out-of-order.js",
+    "race:timeout": "node --disable-warning=ExperimentalWarning scripts/race-timeout.js",
+    "race:stock": "node --disable-warning=ExperimentalWarning scripts/race-out-of-stock.js",
+    "race:promo": "node --disable-warning=ExperimentalWarning scripts/race-promo.js"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,30 @@
+/* Служебные страницы: статус заказа и админка. Дизайн не требуется, нужен рабочий вид. */
+body.plain { background: var(--bg); padding: 32px 16px; }
+
+.sheet {
+  max-width: 900px; margin: 0 auto; background: #fff;
+  border-radius: 18px; padding: 28px; box-shadow: var(--shadow-block);
+}
+.sheet h1 { margin: 8px 0 20px; font-size: 22px; font-weight: 800; }
+.sheet h2 { margin: 28px 0 12px; font-size: 16px; font-weight: 800; }
+.back { font-size: 13px; font-weight: 700; color: var(--muted); }
+
+.pill { display: inline-block; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 800; background: var(--bg); color: var(--ink-soft); }
+.pill--ok { background: #e7f6e7; color: #24632a; }
+.pill--warn { background: #fdf1e3; color: #b54708; }
+.pill--err { background: #fdeceb; color: #b42318; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
+td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
+.toolbar input, .toolbar select {
+  height: 38px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 10px;
+  font-size: 13px; font-weight: 600; outline: none; font-family: inherit;
+}
+.note { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 6px; }
+.error { color: #b42318; font-weight: 700; font-size: 13px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } }
