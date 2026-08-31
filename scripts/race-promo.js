@@ -2,7 +2,7 @@
  * Критерий приёмки 5: промокод с лимитом N под параллельными запросами.
  * Ожидание: применён не более N раз, скидку считает сервер.
  */
-import { api, check, ensureServer, finish, resetProviders, section } from './lib.js';
+import { api, check, ensureServer, ensureStock, finish, resetProviders, section } from './lib.js';
 
 const PARALLEL = Number(process.env.PARALLEL ?? 40);
 
@@ -14,6 +14,7 @@ const usedCount = async (code) => {
 const run = async () => {
   await ensureServer();
   await resetProviders();
+  await ensureStock('KEY-CS2-PRIME', 3);
 
   section(`Промокод LIMIT3 (max_uses = 3) под ${PARALLEL} параллельными запросами`);
   const promoBefore = await usedCount('LIMIT3');

@@ -9,12 +9,14 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 const SCENARIOS = [
+  ['Критерии приёмки из задания (пункты 1-5)', 'acceptance.js'],
   ['Однократная выдача под 50 параллельными вебхуками', 'race-webhooks.js'],
   ['Двойной клик "Купить"', 'race-buy.js'],
   ['Вебхуки вне порядка и раньше заказа', 'race-out-of-order.js'],
   ['Ловушка таймаута поставщика', 'race-timeout.js'],
   ['Пустой пул, восстановление и повторная выдача', 'race-out-of-stock.js'],
   ['Лимит промокода под параллельными запросами', 'race-promo.js'],
+  ['SIGKILL посреди выдачи и восстановление', 'race-restart.js'],
 ];
 
 const runScenario = (file) =>

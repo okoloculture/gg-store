@@ -19,7 +19,9 @@
     "race:out-of-order": "node --disable-warning=ExperimentalWarning scripts/race-out-of-order.js",
     "race:timeout": "node --disable-warning=ExperimentalWarning scripts/race-timeout.js",
     "race:stock": "node --disable-warning=ExperimentalWarning scripts/race-out-of-stock.js",
-    "race:promo": "node --disable-warning=ExperimentalWarning scripts/race-promo.js"
+    "race:promo": "node --disable-warning=ExperimentalWarning scripts/race-promo.js",
+    "acceptance": "node --disable-warning=ExperimentalWarning scripts/acceptance.js",
+    "race:restart": "node --disable-warning=ExperimentalWarning scripts/race-restart.js"
   },
   "dependencies": {}
 }

@@ -83,5 +83,18 @@ export const createOrder = async (sku, extra = {}) => {
   return body.order;
 };
 
+/**
+ * Гарантирует минимальный остаток в пуле, чтобы сценарий не зависел от того,
+ * что запускали до него. Пополняет только недостающее.
+ */
+export const ensureStock = async (sku, needed = 5) => {
+  const { body } = await api.admin.get('/api/admin/stock');
+  for (const provider of ['A', 'B']) {
+    const row = body.stock.find((item) => item.sku === sku && item.provider === provider);
+    const missing = needed - (row?.available ?? 0);
+    if (missing > 0) await api.admin.post('/api/admin/keys/refill', { provider, sku, count: missing });
+  }
+};
+
 export const resetProviders = () =>
   api.admin.post('/api/admin/providers/config', { A: { forced: 'ok' }, B: { forced: 'ok' } });

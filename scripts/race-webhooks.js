@@ -3,13 +3,14 @@
  * 50 параллельных вебхуков "оплачено" по одному заказу + повтор того же event_id.
  * Ожидание: ровно один факт выдачи, ровно один израсходованный ключ.
  */
-import { api, check, createOrder, ensureServer, finish, resetProviders, section, waitForStatus } from './lib.js';
+import { api, check, createOrder, ensureServer, ensureStock, finish, resetProviders, section, waitForStatus } from './lib.js';
 
 const PARALLEL = Number(process.env.PARALLEL ?? 50);
 
 const run = async () => {
   await ensureServer();
   await resetProviders();
+  await ensureStock('KEY-CS2-PRIME', 3);
 
   section(`${PARALLEL} параллельных вебхуков по одному заказу`);
   const order = await createOrder('KEY-CS2-PRIME');

@@ -2,7 +2,7 @@
  * Критерий приёмки 3: вебхук пришёл раньше создания заказа и не по порядку.
  * Ожидание: ничего не потеряно и не задвоено.
  */
-import { api, check, ensureServer, finish, resetProviders, section, waitForStatus } from './lib.js';
+import { api, check, ensureServer, ensureStock, finish, resetProviders, section, waitForStatus } from './lib.js';
 
 const webhook = (orderId, status, eventId, amount) => ({
   event_id: eventId,
@@ -16,6 +16,7 @@ const webhook = (orderId, status, eventId, amount) => ({
 const run = async () => {
   await ensureServer();
   await resetProviders();
+  await ensureStock('KEY-CS2-PRIME', 5);
 
   section('Вебхук приходит раньше создания заказа');
   const earlyId = `ord_early_${Date.now().toString(36)}`;

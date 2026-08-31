@@ -3,12 +3,13 @@
  * Ожидание: повтор с тем же request_id возвращает тот же код,
  * второй ключ не расходуется, заказ доводится до delivered.
  */
-import { api, check, ensureServer, finish, resetProviders, section, waitForStatus } from './lib.js';
+import { api, check, ensureServer, ensureStock, finish, resetProviders, section, waitForStatus } from './lib.js';
 
 const STORM = Number(process.env.STORM ?? 15);
 
 const run = async () => {
   await ensureServer();
+  await ensureStock('KEY-CS2-PRIME', STORM + 5);
 
   section('Поставщик A: код выдан, ответ потерян (жёсткий таймаут)');
   await api.admin.post('/api/admin/providers/config', {
@@ -25,6 +26,7 @@ const run = async () => {
 
   const { body: mid } = await api.admin.get(`/api/admin/audit/${orderId}`);
   check('поставщик списал ровно один код', mid.provider_issues.length === 1, mid.provider_issues.length);
+  check('код зарезервирован до потери ответа', Boolean(mid.provider_issues[0]?.code), mid.provider_issues[0]?.code);
   check('на резервного поставщика после таймаута не переключились',
     mid.provider_issues.every((item) => item.provider === 'A'), mid.provider_issues.map((i) => i.provider));
   const reservedCode = mid.provider_issues[0]?.code;
@@ -33,7 +35,8 @@ const run = async () => {
   await resetProviders();
   const delivered = await waitForStatus(orderId, ['delivered'], { timeoutMs: 30000 });
   check('заказ доведён до delivered', delivered?.status === 'delivered', delivered?.status);
-  check('выдан тот же код, что был зарезервирован', delivered?.delivery?.code === reservedCode, {
+  check('выдан тот же код, что был зарезервирован',
+    Boolean(reservedCode) && delivered?.delivery?.code === reservedCode, {
     reserved: reservedCode, delivered: delivered?.delivery?.code,
   });
 

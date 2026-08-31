@@ -2,13 +2,14 @@
  * Двойной (и N-кратный) клик по кнопке "Купить".
  * Ожидание: один заказ на один Idempotency-Key, один ключ.
  */
-import { api, check, ensureServer, finish, resetProviders, section, waitForStatus } from './lib.js';
+import { api, check, ensureServer, ensureStock, finish, resetProviders, section, waitForStatus } from './lib.js';
 
 const CLICKS = Number(process.env.CLICKS ?? 10);
 
 const run = async () => {
   await ensureServer();
   await resetProviders();
+  await ensureStock('KEY-GTA5', 3);
 
   section(`${CLICKS} одновременных кликов "Купить" с одним Idempotency-Key`);
   const key = `buy-${Date.now()}-${Math.random().toString(36).slice(2)}`;
