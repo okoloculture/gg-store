@@ -53,15 +53,30 @@ const renderProducts = (products) => {
   });
 };
 
-/** Переключатель валют: только активное состояние, пересчёт не требуется. */
-const initCurrency = () => {
+/**
+ * Переключатель валют. Меняет активное состояние и символ у суммы и кнопки.
+ * Пересчёта суммы нет — по заданию он не требуется, меняется только обозначение.
+ */
+const initCurrency = (amount) => {
   const group = document.getElementById('currency');
+  const amountNode = document.getElementById('topup-amount');
+  const payButton = document.getElementById('topup-pay');
+  const label = () => `${amount.toLocaleString('ru-RU')}${group.querySelector('.currency__btn.is-active').dataset.currency}`;
+
+  const render = () => {
+    amountNode.textContent = label();
+    payButton.textContent = `Оплатить ${label()}`;
+  };
+
   group.addEventListener('click', (event) => {
     const button = event.target.closest('.currency__btn');
     if (!button) return;
     group.querySelectorAll('.currency__btn').forEach((item) => item.classList.remove('is-active'));
     button.classList.add('is-active');
+    render();
   });
+
+  render();
 };
 
 const initTopup = () => {
@@ -104,11 +119,13 @@ const boot = async () => {
   initCatalogMenu();
   initBanner();
   renderServices();
-  initCurrency();
   initTopup();
 
   const { products } = await api.catalog();
   renderProducts(products);
+
+  const topup = products.find((product) => product.sku === document.getElementById('topup-pay').dataset.sku);
+  initCurrency(topup?.price ?? 500);
 };
 
 boot();
