@@ -1,4 +1,4 @@
-import { db, inTransaction } from '../db/index.js';
+import { sql, isUniqueViolation } from '../db/index.js';
 import { ORDER_STATUS } from '../config.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { orderId as generateOrderId } from '../lib/ids.js';
@@ -7,19 +7,17 @@ import { assertPromoInput, reservePromo } from './promo.js';
 const ORDER_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
 
 export const getProduct = (sku) =>
-  db.prepare('SELECT * FROM products WHERE sku = ?').get(String(sku ?? '')) ?? null;
+  sql.get('SELECT * FROM products WHERE sku = ?', String(sku ?? ''));
 
-export const listProducts = () =>
-  db.prepare('SELECT * FROM products ORDER BY position').all();
+export const listProducts = () => sql.all('SELECT * FROM products ORDER BY position');
 
-export const getOrderRow = (id) => db.prepare('SELECT * FROM orders WHERE id = ?').get(id) ?? null;
+export const getOrderRow = (id) => sql.get('SELECT * FROM orders WHERE id = ?', id);
 
-export const getDelivery = (id) =>
-  db.prepare('SELECT * FROM deliveries WHERE order_id = ?').get(id) ?? null;
+export const getDelivery = (id) => sql.get('SELECT * FROM deliveries WHERE order_id = ?', id);
 
-export const serializeOrder = (order) => {
+export const serializeOrder = async (order) => {
   if (!order) return null;
-  const delivery = getDelivery(order.id);
+  const delivery = await getDelivery(order.id);
   return {
     id: order.id,
     sku: order.sku,
@@ -41,11 +39,14 @@ export const serializeOrder = (order) => {
   };
 };
 
-export const getOrder = (id) => {
-  const order = getOrderRow(id);
+export const getOrder = async (id) => {
+  const order = await getOrderRow(id);
   if (!order) throw notFound('order_not_found', 'Заказ не найден');
   return serializeOrder(order);
 };
+
+const findByIdempotencyKey = (key) =>
+  sql.get('SELECT * FROM orders WHERE idempotency_key = ?', String(key));
 
 /**
  * Создание заказа.
@@ -57,71 +58,69 @@ export const getOrder = (id) => {
  * Промокод резервируется в ТОЙ ЖЕ транзакции: заказ без слота или слот без
  * заказа существовать не могут.
  */
-export const createOrder = ({ sku, promoCode, steamLogin, idempotencyKey, orderId }) => {
-  const product = getProduct(sku);
+export const createOrder = async ({ sku, promoCode, steamLogin, idempotencyKey, orderId }) => {
+  const product = await getProduct(sku);
   if (!product) throw badRequest('unknown_sku', 'Товар не найден');
 
   const promo = assertPromoInput(promoCode);
   const login = steamLogin ? String(steamLogin).slice(0, 64) : null;
 
   if (idempotencyKey) {
-    const existing = db
-      .prepare('SELECT * FROM orders WHERE idempotency_key = ?')
-      .get(String(idempotencyKey));
-    if (existing) return { order: serializeOrder(existing), reused: true };
+    const existing = await findByIdempotencyKey(idempotencyKey);
+    if (existing) return { order: await serializeOrder(existing), reused: true };
   }
 
   const id = orderId ? String(orderId) : generateOrderId();
   if (!ORDER_ID_RE.test(id)) throw badRequest('invalid_order_id', 'Некорректный идентификатор заказа');
 
   try {
-    const created = inTransaction(() => {
+    const created = await sql.transaction(async () => {
       if (idempotencyKey) {
-        const existing = db
-          .prepare('SELECT * FROM orders WHERE idempotency_key = ?')
-          .get(String(idempotencyKey));
+        const existing = await findByIdempotencyKey(idempotencyKey);
         if (existing) return { order: existing, reused: true };
       }
-      const duplicateId = db.prepare('SELECT 1 FROM orders WHERE id = ?').get(id);
+      const duplicateId = await sql.get('SELECT 1 AS found FROM orders WHERE id = ?', id);
       if (duplicateId) throw badRequest('order_exists', 'Заказ с таким идентификатором уже существует');
 
       const now = new Date().toISOString();
-      db.prepare(
+      await sql.run(
         `INSERT INTO orders (id, sku, status, base_amount_minor, discount_minor, amount_minor,
                              currency, promo_code, steam_login, idempotency_key, created_at, updated_at)
          VALUES (?, ?, ?, ?, 0, ?, ?, NULL, ?, ?, ?, ?)`,
-      ).run(id, product.sku, ORDER_STATUS.CREATED, product.price_minor, product.price_minor,
-        product.currency, login, idempotencyKey ? String(idempotencyKey) : null, now, now);
+        id, product.sku, ORDER_STATUS.CREATED, product.price_minor, product.price_minor,
+        product.currency, login, idempotencyKey ? String(idempotencyKey) : null, now, now,
+      );
 
       if (promo) {
-        const reserved = reservePromo(promo, id, product.price_minor);
-        db.prepare('UPDATE orders SET promo_code = ?, discount_minor = ?, amount_minor = ? WHERE id = ?')
-          .run(reserved.code, reserved.discount_minor, product.price_minor - reserved.discount_minor, id);
+        const reserved = await reservePromo(promo, id, product.price_minor);
+        await sql.run(
+          'UPDATE orders SET promo_code = ?, discount_minor = ?, amount_minor = ? WHERE id = ?',
+          reserved.code, reserved.discount_minor, product.price_minor - reserved.discount_minor, id,
+        );
       }
 
-      return { order: getOrderRow(id), reused: false };
+      return { order: await getOrderRow(id), reused: false };
     });
 
-    return { order: serializeOrder(created.order), reused: created.reused };
+    return { order: await serializeOrder(created.order), reused: created.reused };
   } catch (error) {
     // Гонка на UNIQUE(idempotency_key): второй клик проиграл вставку — отдаём первый заказ.
-    if (idempotencyKey && /UNIQUE constraint failed: orders.idempotency_key/.test(error?.message ?? '')) {
-      const existing = db.prepare('SELECT * FROM orders WHERE idempotency_key = ?').get(String(idempotencyKey));
-      if (existing) return { order: serializeOrder(existing), reused: true };
+    if (idempotencyKey && isUniqueViolation(error, 'orders', 'idempotency_key')) {
+      const existing = await findByIdempotencyKey(idempotencyKey);
+      if (existing) return { order: await serializeOrder(existing), reused: true };
     }
     throw error;
   }
 };
 
-export const listOrders = ({ status, limit = 100 } = {}) => {
+export const listOrders = async ({ status, limit = 100 } = {}) => {
   const statuses = Array.isArray(status) ? status : status ? [status] : null;
   const rows = statuses
-    ? db
-        .prepare(
-          `SELECT * FROM orders WHERE status IN (${statuses.map(() => '?').join(',')})
-           ORDER BY created_at DESC LIMIT ?`,
-        )
-        .all(...statuses, limit)
-    : db.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT ?').all(limit);
-  return rows.map(serializeOrder);
+    ? await sql.all(
+        `SELECT * FROM orders WHERE status IN (${statuses.map(() => '?').join(',')})
+         ORDER BY created_at DESC LIMIT ?`,
+        ...statuses, limit,
+      )
+    : await sql.all('SELECT * FROM orders ORDER BY created_at DESC LIMIT ?', limit);
+  return Promise.all(rows.map(serializeOrder));
 };

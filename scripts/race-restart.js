@@ -8,7 +8,7 @@
  * Скрипт поднимает и убивает собственный сервер на отдельном порту и БД,
  * основной сервер ему не нужен.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,36 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.RESTART_PORT ?? 3299);
 const DB = path.join(root, 'data', 'restart-test.db');
 const BASE = `http://127.0.0.1:${PORT}`;
+
+/**
+ * Сценарию нужна отдельная БД: он считает выдачи и ключи по всей базе.
+ * В режиме Postgres берётся отдельная база (по умолчанию — имя основной с
+ * суффиксом _restart), в режиме SQLite — отдельный файл.
+ */
+const RESTART_DATABASE_URL = process.env.DATABASE_URL
+  ? process.env.RESTART_DATABASE_URL
+    ?? process.env.DATABASE_URL.replace(/\/([^/?]+)(\?|$)/, '/$1_restart$2')
+  : null;
+
+const dbEnv = RESTART_DATABASE_URL
+  ? { DB_DRIVER: 'postgres', DATABASE_URL: RESTART_DATABASE_URL }
+  : { DB_DRIVER: 'sqlite', DATABASE_URL: '', DB_PATH: DB };
+
+const resetDatabase = () => {
+  if (!RESTART_DATABASE_URL) {
+    for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${DB}${suffix}`, { force: true });
+    return;
+  }
+  const done = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', 'src/db/seed.js', '--reset'], {
+    cwd: root,
+    stdio: 'ignore',
+    env: { ...process.env, ...dbEnv, LOG_LEVEL: 'error' },
+  });
+  if (done.status !== 0) {
+    process.stdout.write(`не удалось подготовить базу ${RESTART_DATABASE_URL}\n`);
+    process.exit(1);
+  }
+};
 
 const call = async (method, urlPath, body, headers) => {
   const response = await fetch(`${BASE}${urlPath}`, {
@@ -34,7 +64,7 @@ const startServer = (env) => {
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'src/server.js'], {
     cwd: root,
     stdio: 'ignore',
-    env: { ...process.env, PORT: String(PORT), DB_PATH: DB, DELIVERY_LEASE_MS: '2500',
+    env: { ...process.env, ...dbEnv, PORT: String(PORT), DELIVERY_LEASE_MS: '2500',
       RECONCILE_INTERVAL_MS: '1000', LOG_LEVEL: 'error', ...env },
   });
   return child;
@@ -64,7 +94,7 @@ const waitStatus = async (id, statuses, timeoutMs = 30000) => {
 };
 
 const run = async () => {
-  for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${DB}${suffix}`, { force: true });
+  resetDatabase();
 
   section('Поднимаем отдельный сервер, поставщик A зависает после списания кода');
   let server = startServer({ PROVIDER_A_TIMEOUT_RATE: '1', PROVIDER_A_FAIL_RATE: '0' });

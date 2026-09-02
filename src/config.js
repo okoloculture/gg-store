@@ -13,8 +13,26 @@ export const config = {
   publicDir: path.join(rootDir, 'public'),
   port: num(process.env.PORT, 3210),
   host: process.env.HOST ?? '127.0.0.1',
-  dbPath: process.env.DB_PATH ?? path.join(rootDir, 'data', 'store.db'),
   adminToken: process.env.ADMIN_TOKEN ?? 'dev-admin-token',
+  cronSecret: process.env.CRON_SECRET ?? null,
+
+  // sqlite — локальная разработка и тесты (нулевая настройка),
+  // postgres — деплой на Vercel, где локального диска нет.
+  dbDriver: (process.env.DB_DRIVER ?? (process.env.DATABASE_URL ? 'postgres' : 'sqlite')).toLowerCase(),
+  dbPath: process.env.DB_PATH ?? path.join(rootDir, 'data', 'store.db'),
+  databaseUrl: process.env.DATABASE_URL ?? null,
+  pgMaxConnections: num(process.env.PG_MAX_CONNECTIONS, 5),
+  pgStatementTimeoutMs: num(process.env.PG_STATEMENT_TIMEOUT_MS, 15_000),
+
+  // На serverless фоновой работы после ответа нет: выдачу приходится
+  // дожидаться внутри обработчика вебхука.
+  serverless: process.env.VERCEL === '1' || process.env.SERVERLESS === '1',
+  publicBaseUrl: process.env.PUBLIC_BASE_URL
+    ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null),
+  // Сколько опрос статуса ждёт запущенную им же выдачу, прежде чем ответить
+  // текущим состоянием. Брошенная на полпути попытка безопасна: код закреплён
+  // за детерминированным request_id, а заказ подберёт следующая попытка.
+  serverlessDeliveryWaitMs: num(process.env.SERVERLESS_DELIVERY_WAIT_MS, 2000),
 
   // Аренда на выдачу: сколько заказ может провисеть в delivering, прежде чем
   // сверщик заберёт его у зависшего воркера.
@@ -24,6 +42,8 @@ export const config = {
   providerTimeoutMs: num(process.env.PROVIDER_TIMEOUT_MS, 1500),
   maxAutoDeliveryAttempts: num(process.env.MAX_AUTO_DELIVERY_ATTEMPTS, 5),
   reconcileIntervalMs: num(process.env.RECONCILE_INTERVAL_MS, 3000),
+  // Сколько заглушка "висит" после выдачи кода, изображая потерянный ответ.
+  providerHangMs: num(process.env.PROVIDER_HANG_MS, 60_000),
 
   providers: {
     A: {

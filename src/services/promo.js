@@ -1,10 +1,10 @@
-import { db } from '../db/index.js';
+import { sql } from '../db/index.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 
 const normalize = (code) => String(code ?? '').trim().toUpperCase();
 
 export const findPromo = (code) =>
-  db.prepare('SELECT * FROM promocodes WHERE code = ?').get(normalize(code)) ?? null;
+  sql.get('SELECT * FROM promocodes WHERE code = ?', normalize(code));
 
 /**
  * Скидка считается ТОЛЬКО на сервере и только от цены товара из БД.
@@ -18,8 +18,8 @@ export const computeDiscount = (promo, baseMinor) => {
   return Math.max(0, Math.min(raw, baseMinor));
 };
 
-export const previewPromo = (code, product) => {
-  const promo = findPromo(code);
+export const previewPromo = async (code, product) => {
+  const promo = await findPromo(code);
   if (!promo) throw notFound('promo_not_found', 'Промокод не найден');
   if (promo.used_count >= promo.max_uses) {
     throw conflict('promo_exhausted', 'Лимит использований промокода исчерпан');
@@ -38,27 +38,30 @@ export const previewPromo = (code, product) => {
  * Занимает один слот использования. Вызывается ВНУТРИ той же транзакции,
  * что и создание заказа.
  *
- * Условный UPDATE `used_count < max_uses` под BEGIN IMMEDIATE атомарен:
- * при N параллельных попытках ровно max_uses из них получат changes = 1,
- * остальные получат 0 и откатятся. Проверка "хватает ли лимита" и его
- * расход происходят одной операцией, окна для гонки нет.
+ * Условный UPDATE `used_count < max_uses` атомарен на обоих движках: под
+ * BEGIN IMMEDIATE в SQLite и за счёт перепроверки условия по новой версии
+ * строки в Postgres. При N параллельных попытках ровно max_uses из них
+ * получат changes = 1, остальные — 0 и откатятся. Проверка "хватает ли
+ * лимита" и его расход происходят одной операцией, окна для гонки нет.
  */
-export const reservePromo = (code, orderId, baseMinor) => {
+export const reservePromo = async (code, orderId, baseMinor) => {
   const normalized = normalize(code);
-  const promo = db.prepare('SELECT * FROM promocodes WHERE code = ?').get(normalized);
+  const promo = await sql.get('SELECT * FROM promocodes WHERE code = ?', normalized);
   if (!promo) throw notFound('promo_not_found', 'Промокод не найден');
 
-  const claimed = db
-    .prepare('UPDATE promocodes SET used_count = used_count + 1 WHERE code = ? AND used_count < max_uses')
-    .run(normalized).changes;
+  const claimed = await sql.run(
+    'UPDATE promocodes SET used_count = used_count + 1 WHERE code = ? AND used_count < max_uses',
+    normalized,
+  );
   if (claimed !== 1) {
     throw conflict('promo_exhausted', 'Лимит использований промокода исчерпан');
   }
 
   const discount = computeDiscount(promo, baseMinor);
-  db.prepare(
+  await sql.run(
     'INSERT INTO promo_redemptions (order_id, code, discount_minor, created_at) VALUES (?, ?, ?, ?)',
-  ).run(orderId, normalized, discount, new Date().toISOString());
+    orderId, normalized, discount, new Date().toISOString(),
+  );
 
   return { code: normalized, discount_minor: discount };
 };
@@ -67,24 +70,27 @@ export const reservePromo = (code, orderId, baseMinor) => {
  * Возврат слота, если оплата не прошла. Идемпотентен: released_at IS NULL
  * в условии не даёт вернуть один и тот же слот дважды.
  */
-export const releasePromo = (orderId) => {
-  const redemption = db
-    .prepare('SELECT * FROM promo_redemptions WHERE order_id = ? AND released_at IS NULL')
-    .get(orderId);
+export const releasePromo = async (orderId) => {
+  const redemption = await sql.get(
+    'SELECT * FROM promo_redemptions WHERE order_id = ? AND released_at IS NULL', orderId,
+  );
   if (!redemption) return false;
 
-  const released = db
-    .prepare('UPDATE promo_redemptions SET released_at = ? WHERE order_id = ? AND released_at IS NULL')
-    .run(new Date().toISOString(), orderId).changes;
+  const released = await sql.run(
+    'UPDATE promo_redemptions SET released_at = ? WHERE order_id = ? AND released_at IS NULL',
+    new Date().toISOString(), orderId,
+  );
   if (released !== 1) return false;
 
-  db.prepare('UPDATE promocodes SET used_count = used_count - 1 WHERE code = ? AND used_count > 0')
-    .run(redemption.code);
+  await sql.run(
+    'UPDATE promocodes SET used_count = used_count - 1 WHERE code = ? AND used_count > 0',
+    redemption.code,
+  );
   return true;
 };
 
 export const promoStats = () =>
-  db.prepare('SELECT code, type, value, max_uses, used_count FROM promocodes ORDER BY code').all();
+  sql.all('SELECT code, type, value, max_uses, used_count FROM promocodes ORDER BY code');
 
 export const assertPromoInput = (code) => {
   if (code === undefined || code === null || code === '') return null;

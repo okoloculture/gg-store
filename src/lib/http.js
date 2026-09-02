@@ -26,10 +26,38 @@ export const sendJson = (res, status, payload) => {
   res.end(body);
 };
 
+const asObject = (value) => {
+  if (value === undefined || value === null) return null;
+  if (Buffer.isBuffer(value)) return asObject(value.toString('utf8'));
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      throw new AppError(400, 'invalid_json', 'Тело запроса не является корректным JSON');
+    }
+  }
+  return typeof value === 'object' ? value : {};
+};
+
 export const readJsonBody = (req) =>
   new Promise((resolve, reject) => {
     if (req.method === 'GET' || req.method === 'HEAD') {
       resolve({});
+      return;
+    }
+    // Serverless-платформа разбирает тело до вызова обработчика: поток уже
+    // прочитан, и ждать в нём 'end' означало бы повиснуть навсегда.
+    try {
+      const parsed = asObject(req.body);
+      if (parsed) {
+        resolve(parsed);
+        return;
+      }
+    } catch (error) {
+      reject(error);
       return;
     }
     const chunks = [];

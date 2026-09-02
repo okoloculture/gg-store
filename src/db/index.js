@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,41 +6,71 @@ import { config } from '../config.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
+/**
+ * Драйвер подключается динамически: в режиме sqlite пакет pg не загружается,
+ * поэтому локальный запуск и тесты по-прежнему не требуют ни одной установки.
+ */
+const buildDriver = async () => {
+  if (config.dbDriver === 'postgres') {
+    if (!config.databaseUrl) throw new Error('DB_DRIVER=postgres требует DATABASE_URL');
+    const { createPostgresDriver } = await import('./drivers/postgres.js');
+    return createPostgresDriver({
+      connectionString: config.databaseUrl,
+      maxConnections: config.pgMaxConnections,
+      statementTimeoutMs: config.pgStatementTimeoutMs,
+    });
+  }
+  const { createSqliteDriver } = await import('./drivers/sqlite.js');
+  return createSqliteDriver({ dbPath: config.dbPath });
+};
 
-export const db = new DatabaseSync(config.dbPath);
+const driver = await buildDriver();
 
-// WAL + busy_timeout: параллельные писатели ждут блокировку, а не падают с SQLITE_BUSY.
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA synchronous = NORMAL');
-db.exec('PRAGMA foreign_keys = ON');
-db.exec('PRAGMA busy_timeout = 10000');
+// Внутри транзакции все запросы обязаны идти по её соединению. ALS переносит
+// это соединение через цепочку await, поэтому сервисам не нужно протаскивать
+// его параметром через каждый вызов.
+const current = new AsyncLocalStorage();
+const runner = () => current.getStore() ?? driver;
 
-export const migrate = () => {
-  db.exec(fs.readFileSync(path.join(here, 'schema.sql'), 'utf8'));
+const isPostgres = driver.dialect === 'postgres';
+
+export const sql = {
+  dialect: driver.dialect,
+
+  // SQLite сериализует транзакции целиком (BEGIN IMMEDIATE), Postgres — нет,
+  // поэтому там, где логика читает строку и решает по ней, в Postgres нужна
+  // явная блокировка строки. В SQLite эти фрагменты пустые.
+  forUpdate: isPostgres ? ' FOR UPDATE' : '',
+  skipLocked: isPostgres ? ' FOR UPDATE SKIP LOCKED' : '',
+  get: (text, ...params) => runner().get(text, params),
+  all: (text, ...params) => runner().all(text, params),
+  run: (text, ...params) => runner().run(text, params),
+  exec: (text) => runner().exec(text),
+
+  /**
+   * Вложенный вызов присоединяется к внешней транзакции, а не открывает свою:
+   * заказ и слот промокода обязаны фиксироваться одним COMMIT.
+   */
+  transaction: (fn) => {
+    if (current.getStore()) return fn();
+    return driver.transaction((connection) => current.run(connection, fn));
+  },
+
+  close: () => driver.close(),
+};
+
+export const migrate = async () => {
+  const file = driver.dialect === 'postgres' ? 'schema.postgres.sql' : 'schema.sqlite.sql';
+  await driver.exec(fs.readFileSync(path.join(here, file), 'utf8'));
 };
 
 /**
- * BEGIN IMMEDIATE берёт write-блокировку сразу, а не при первой записи.
- * Это убирает окно "read -> decide -> write", в котором два процесса могли бы
- * прочитать одно и то же состояние и оба решить, что имеют право выдать ключ.
+ * Нарушение UNIQUE — штатный исход гонки, а не сбой: проигравший вставку
+ * должен вернуть уже созданную строку. Движки сообщают об этом по-разному,
+ * поэтому проверка вынесена сюда.
  */
-export const inTransaction = (fn) => {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      // транзакция уже откатилась
-    }
-    throw error;
-  }
+export const isUniqueViolation = (error, table, column) => {
+  const target = driver.uniqueTarget(error);
+  if (!target) return false;
+  return target.includes(table) && target.includes(column);
 };
-
-export const changes = () => Number(db.prepare('SELECT changes() AS n').get().n);
-
-migrate();

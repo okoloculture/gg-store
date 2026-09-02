@@ -21,7 +21,11 @@
     "race:stock": "node --disable-warning=ExperimentalWarning scripts/race-out-of-stock.js",
     "race:promo": "node --disable-warning=ExperimentalWarning scripts/race-promo.js",
     "acceptance": "node --disable-warning=ExperimentalWarning scripts/acceptance.js",
-    "race:restart": "node --disable-warning=ExperimentalWarning scripts/race-restart.js"
+    "race:restart": "node --disable-warning=ExperimentalWarning scripts/race-restart.js",
+    "setup": "node --disable-warning=ExperimentalWarning src/db/seed.js --reset",
+    "test:pg": "node --disable-warning=ExperimentalWarning --env-file=.env.test.pg --test-concurrency=1 --test tests/*.test.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { db, inTransaction } from '../db/index.js';
+import { sql } from '../db/index.js';
 import { ORDER_STATUS, RECOVERABLE_STATUSES, config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { providerRequestId } from '../lib/ids.js';
@@ -10,8 +10,10 @@ const inFlight = new Map();
 
 const touch = (id, fields) => {
   const entries = Object.entries({ ...fields, updated_at: new Date().toISOString() });
-  db.prepare(`UPDATE orders SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`)
-    .run(...entries.map(([, v]) => v), id);
+  return sql.run(
+    `UPDATE orders SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`,
+    ...entries.map(([, value]) => value), id,
+  );
 };
 
 /**
@@ -25,14 +27,14 @@ const touch = (id, fields) => {
  * зависший заказ по истечении lease_until.
  */
 const claimLease = (orderId) =>
-  inTransaction(() => {
-    const order = getOrderRow(orderId);
+  sql.transaction(async () => {
+    const order = await getOrderRow(orderId);
     if (!order) return { claimed: false, reason: 'order_not_found' };
 
-    const delivered = getDelivery(orderId);
+    const delivered = await getDelivery(orderId);
     if (delivered) {
       if (order.status !== ORDER_STATUS.DELIVERED) {
-        touch(orderId, { status: ORDER_STATUS.DELIVERED, lease_until: null, lease_token: null });
+        await touch(orderId, { status: ORDER_STATUS.DELIVERED, lease_until: null, lease_token: null });
       }
       return { claimed: false, reason: 'already_delivered' };
     }
@@ -42,19 +44,16 @@ const claimLease = (orderId) =>
 
     const now = Date.now();
     const token = randomUUID();
-    const claimed = db
-      .prepare(
-        `UPDATE orders
-            SET status = ?, lease_until = ?, lease_token = ?,
-                delivery_attempts = delivery_attempts + 1, updated_at = ?
-          WHERE id = ?
-            AND (status IN (${RECOVERABLE_STATUSES.map(() => '?').join(',')})
-                 OR (status = ? AND (lease_until IS NULL OR lease_until < ?)))`,
-      )
-      .run(
-        ORDER_STATUS.DELIVERING, now + config.deliveryLeaseMs, token, new Date().toISOString(),
-        orderId, ...RECOVERABLE_STATUSES, ORDER_STATUS.DELIVERING, now,
-      ).changes;
+    const claimed = await sql.run(
+      `UPDATE orders
+          SET status = ?, lease_until = ?, lease_token = ?,
+              delivery_attempts = delivery_attempts + 1, updated_at = ?
+        WHERE id = ?
+          AND (status IN (${RECOVERABLE_STATUSES.map(() => '?').join(',')})
+               OR (status = ? AND (lease_until IS NULL OR lease_until < ?)))`,
+      ORDER_STATUS.DELIVERING, now + config.deliveryLeaseMs, token, new Date().toISOString(),
+      orderId, ...RECOVERABLE_STATUSES, ORDER_STATUS.DELIVERING, now,
+    );
 
     if (claimed !== 1) return { claimed: false, reason: 'busy' };
     return {
@@ -74,36 +73,33 @@ const claimLease = (orderId) =>
  * Второй получит changes = 0 и вернёт уже существующий код.
  */
 const persistDelivery = ({ orderId, code, provider, requestId }) =>
-  inTransaction(() => {
-    const inserted = db
-      .prepare(
-        `INSERT OR IGNORE INTO deliveries (order_id, code, provider, request_id, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(orderId, code, provider, requestId, new Date().toISOString()).changes;
+  sql.transaction(async () => {
+    const inserted = await sql.run(
+      `INSERT OR IGNORE INTO deliveries (order_id, code, provider, request_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      orderId, code, provider, requestId, new Date().toISOString(),
+    );
 
-    touch(orderId, {
+    await touch(orderId, {
       status: ORDER_STATUS.DELIVERED,
       lease_until: null,
       lease_token: null,
       pending_provider: null,
       last_error: null,
     });
-    const delivery = getDelivery(orderId);
-    return { firstWrite: inserted === 1, delivery };
+    return { firstWrite: inserted === 1, delivery: await getDelivery(orderId) };
   });
 
 const failDelivery = ({ orderId, token, status, reason, pendingProvider }) =>
-  inTransaction(() => {
-    const applied = db
-      .prepare(
-        `UPDATE orders
-            SET status = ?, last_error = ?, pending_provider = ?,
-                lease_until = NULL, lease_token = NULL, updated_at = ?
-          WHERE id = ? AND status = ? AND lease_token = ?`,
-      )
-      .run(status, reason, pendingProvider ?? null, new Date().toISOString(),
-        orderId, ORDER_STATUS.DELIVERING, token).changes;
+  sql.transaction(async () => {
+    const applied = await sql.run(
+      `UPDATE orders
+          SET status = ?, last_error = ?, pending_provider = ?,
+              lease_until = NULL, lease_token = NULL, updated_at = ?
+        WHERE id = ? AND status = ? AND lease_token = ?`,
+      status, reason, pendingProvider ?? null, new Date().toISOString(),
+      orderId, ORDER_STATUS.DELIVERING, token,
+    );
     return applied === 1;
   });
 
@@ -155,24 +151,30 @@ const attemptProviders = async ({ orderId, sku, pendingProvider }) => {
   };
 };
 
+const currentOrder = async (orderId) => serializeOrder(await getOrderRow(orderId));
+
 const runDelivery = async (orderId, source) => {
-  const lease = claimLease(orderId);
+  const lease = await claimLease(orderId);
   if (!lease.claimed) {
-    return { delivered: lease.reason === 'already_delivered', skipped: lease.reason, order: serializeOrder(getOrderRow(orderId)) };
+    return {
+      delivered: lease.reason === 'already_delivered',
+      skipped: lease.reason,
+      order: await currentOrder(orderId),
+    };
   }
 
   logger.info('старт выдачи', { orderId, source, attempt: lease.attempts });
   const outcome = await attemptProviders({ orderId, sku: lease.sku, pendingProvider: lease.pendingProvider });
 
   if (outcome.ok) {
-    const { firstWrite, delivery } = persistDelivery({
+    const { firstWrite, delivery } = await persistDelivery({
       orderId, code: outcome.code, provider: outcome.provider, requestId: outcome.requestId,
     });
     logger.info('выдача завершена', { orderId, provider: outcome.provider, firstWrite, code: delivery.code });
-    return { delivered: true, firstWrite, order: serializeOrder(getOrderRow(orderId)) };
+    return { delivered: true, firstWrite, order: await currentOrder(orderId) };
   }
 
-  failDelivery({
+  await failDelivery({
     orderId,
     token: lease.token,
     status: outcome.terminal,
@@ -180,7 +182,12 @@ const runDelivery = async (orderId, source) => {
     pendingProvider: outcome.pendingProvider,
   });
   logger.warn('выдача не удалась', { orderId, status: outcome.terminal, reason: outcome.reason });
-  return { delivered: false, status: outcome.terminal, reason: outcome.reason, order: serializeOrder(getOrderRow(orderId)) };
+  return {
+    delivered: false,
+    status: outcome.terminal,
+    reason: outcome.reason,
+    order: await currentOrder(orderId),
+  };
 };
 
 /**
@@ -197,8 +204,14 @@ export const deliverOrder = (orderId, { source = 'api' } = {}) => {
   return promise;
 };
 
+/**
+ * Постановка выдачи в фон. На serverless фона не существует: всё, что не
+ * завершилось до ответа, будет убито вместе с инстансом, поэтому там вызов
+ * возвращает промис и обработчик его дожидается.
+ */
 export const enqueueDelivery = (orderId, options) => {
-  deliverOrder(orderId, options).catch((error) => {
+  const promise = deliverOrder(orderId, options).catch((error) => {
     logger.error('фоновая выдача упала', { orderId, error: error?.message });
   });
+  return config.serverless ? promise : undefined;
 };

@@ -1,12 +1,12 @@
-import { db } from '../src/db/index.js';
-import { seed } from '../src/db/seed.js';
+import { after } from 'node:test';
+import { sql } from '../src/db/index.js';
+import { seed, TABLES } from '../src/db/seed.js';
 
-export const resetDatabase = () => {
-  for (const table of ['deliveries', 'promo_redemptions', 'payment_events', 'orders',
-    'provider_issues', 'provider_keys', 'promocodes', 'products']) {
-    db.exec(`DELETE FROM ${table}`);
-  }
-  seed();
+export const resetDatabase = async () => {
+  await seed({ reset: true });
 };
 
-export { db };
+// Пул Postgres держит соединения открытыми и не даёт процессу завершиться.
+after(() => sql.close());
+
+export { sql, TABLES };

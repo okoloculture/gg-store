@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, inTransaction, migrate } from './index.js';
+import { sql, migrate } from './index.js';
 import { logger } from '../lib/logger.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -64,55 +64,63 @@ const buildPool = () => {
   return pool;
 };
 
-export const seed = ({ reset = false } = {}) => {
-  migrate();
+export const TABLES = [
+  'deliveries', 'promo_redemptions', 'payment_events', 'orders',
+  'provider_issues', 'provider_keys', 'promocodes', 'products',
+];
 
-  inTransaction(() => {
+export const seed = async ({ reset = false } = {}) => {
+  await migrate();
+
+  await sql.transaction(async () => {
     if (reset) {
-      for (const table of ['deliveries', 'promo_redemptions', 'payment_events', 'orders', 'provider_issues', 'provider_keys', 'promocodes', 'products']) {
-        db.exec(`DELETE FROM ${table}`);
+      for (const table of TABLES) {
+        await sql.exec(`DELETE FROM ${table}`);
       }
     }
 
-    const insertProduct = db.prepare(
-      `INSERT INTO products (sku, name, type, price_minor, currency, image, position)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(sku) DO UPDATE SET
-         name = excluded.name, type = excluded.type, price_minor = excluded.price_minor,
-         currency = excluded.currency, image = excluded.image, position = excluded.position`,
-    );
-    source.products.forEach((product, index) => {
-      insertProduct.run(product.sku, product.name, product.type, product.price * 100, product.currency, product.image, index);
-    });
-
-    const insertPromo = db.prepare(
-      `INSERT INTO promocodes (code, type, value, currency, max_uses, used_count)
-       VALUES (?, ?, ?, ?, ?, 0)
-       ON CONFLICT(code) DO UPDATE SET
-         type = excluded.type, value = excluded.value, currency = excluded.currency,
-         max_uses = excluded.max_uses`,
-    );
-    for (const promo of source.promocodes) {
-      const value = promo.type === 'amount' ? promo.value * 100 : promo.value;
-      insertPromo.run(promo.code, promo.type, value, promo.currency ?? null, promo.max_uses);
+    for (const [index, product] of source.products.entries()) {
+      await sql.run(
+        `INSERT INTO products (sku, name, type, price_minor, currency, image, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(sku) DO UPDATE SET
+           name = excluded.name, type = excluded.type, price_minor = excluded.price_minor,
+           currency = excluded.currency, image = excluded.image, position = excluded.position`,
+        product.sku, product.name, product.type, product.price * 100,
+        product.currency, product.image, index,
+      );
     }
 
-    const insertKey = db.prepare(
-      'INSERT OR IGNORE INTO provider_keys (provider, sku, code) VALUES (?, ?, ?)',
-    );
+    for (const promo of source.promocodes) {
+      const value = promo.type === 'amount' ? promo.value * 100 : promo.value;
+      await sql.run(
+        `INSERT INTO promocodes (code, type, value, currency, max_uses, used_count)
+         VALUES (?, ?, ?, ?, ?, 0)
+         ON CONFLICT(code) DO UPDATE SET
+           type = excluded.type, value = excluded.value, currency = excluded.currency,
+           max_uses = excluded.max_uses`,
+        promo.code, promo.type, value, promo.currency ?? null, promo.max_uses,
+      );
+    }
+
     let added = 0;
     for (const item of buildPool()) {
-      added += insertKey.run(item.provider, item.sku, item.code).changes;
+      added += await sql.run(
+        'INSERT OR IGNORE INTO provider_keys (provider, sku, code) VALUES (?, ?, ?)',
+        item.provider, item.sku, item.code,
+      );
     }
     logger.info('seed завершён', {
       products: source.products.length,
       promocodes: source.promocodes.length,
       keysAdded: added,
       reset,
+      driver: sql.dialect,
     });
   });
 };
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  seed({ reset: process.argv.includes('--reset') });
+  await seed({ reset: process.argv.includes('--reset') });
+  await sql.close();
 }

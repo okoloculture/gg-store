@@ -3,7 +3,9 @@ import { logger } from '../lib/logger.js';
 
 export const PROVIDER_ORDER = ['A', 'B'];
 
-const baseUrl = () => `http://${config.host}:${config.port}`;
+// На Vercel заглушка живёт в той же функции, но вызывается по HTTP, как
+// вызывался бы внешний поставщик: адрес берётся из PUBLIC_BASE_URL/VERCEL_URL.
+const baseUrl = () => config.publicBaseUrl ?? `http://${config.host}:${config.port}`;
 
 /**
  * Один вызов POST /provider/:id/issue с жёстким таймаутом.

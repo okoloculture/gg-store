@@ -1,4 +1,4 @@
-import { db, inTransaction } from '../db/index.js';
+import { sql } from '../db/index.js';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 
@@ -10,8 +10,8 @@ import { logger } from '../lib/logger.js';
  * сценарии "5xx", "таймаут" и "пустой пул" воспроизводились детерминированно.
  */
 const runtime = {
-  A: { ...config.providers.A, timeoutMs: 60_000, forced: null },
-  B: { ...config.providers.B, timeoutMs: 60_000, forced: null },
+  A: { ...config.providers.A, timeoutMs: config.providerHangMs, forced: null },
+  B: { ...config.providers.B, timeoutMs: config.providerHangMs, forced: null },
 };
 
 export const getProviderConfig = () => structuredClone(runtime);
@@ -46,27 +46,31 @@ const decideBehaviour = (provider) => {
  * параллельных вызовах: занять свободную строку сможет ровно один.
  */
 export const issueCode = ({ provider, sku, orderId, requestId }) =>
-  inTransaction(() => {
-    const known = db.prepare('SELECT * FROM provider_issues WHERE request_id = ?').get(requestId);
+  sql.transaction(async () => {
+    const known = await sql.get('SELECT * FROM provider_issues WHERE request_id = ?', requestId);
     if (known) return { status: 'ok', code: known.code, replayed: true };
 
-    const claimed = db
-      .prepare(
-        `UPDATE provider_keys SET request_id = ?, issued_at = ?
-         WHERE id = (
-           SELECT id FROM provider_keys
-           WHERE provider = ? AND sku = ? AND request_id IS NULL
-           ORDER BY id LIMIT 1
-         ) AND request_id IS NULL`,
-      )
-      .run(requestId, new Date().toISOString(), provider, sku).changes;
+    // SKIP LOCKED в Postgres пропускает строки, которые прямо сейчас забирает
+    // другой запрос: без него параллельные попытки упирались бы в одну и ту же
+    // строку и получали ложный out_of_stock. В SQLite транзакции сериализованы
+    // целиком, и такой строки в подзапросе просто не бывает.
+    const claimed = await sql.run(
+      `UPDATE provider_keys SET request_id = ?, issued_at = ?
+       WHERE id = (
+         SELECT id FROM provider_keys
+         WHERE provider = ? AND sku = ? AND request_id IS NULL
+         ORDER BY id LIMIT 1${sql.skipLocked}
+       ) AND request_id IS NULL`,
+      requestId, new Date().toISOString(), provider, sku,
+    );
 
     if (claimed !== 1) return { status: 'error', reason: 'out_of_stock' };
 
-    const key = db.prepare('SELECT code FROM provider_keys WHERE request_id = ?').get(requestId);
-    db.prepare(
+    const key = await sql.get('SELECT code FROM provider_keys WHERE request_id = ?', requestId);
+    await sql.run(
       'INSERT INTO provider_issues (request_id, provider, order_id, sku, code, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(requestId, provider, orderId, sku, key.code, new Date().toISOString());
+      requestId, provider, orderId, sku, key.code, new Date().toISOString(),
+    );
 
     return { status: 'ok', code: key.code, replayed: false };
   });
@@ -82,7 +86,7 @@ export const handleIssueRequest = async ({ provider, sku, orderId, requestId }) 
     return { httpStatus: 503, body: { status: 'error', reason: 'provider_unavailable' } };
   }
 
-  const result = issueCode({ provider, sku, orderId, requestId });
+  const result = await issueCode({ provider, sku, orderId, requestId });
 
   if (behaviour === 'timeout') {
     logger.warn('поставщик "завис" после выдачи кода', { provider, requestId, issued: result.status === 'ok' });
@@ -96,30 +100,29 @@ export const handleIssueRequest = async ({ provider, sku, orderId, requestId }) 
 };
 
 export const stockByProvider = () =>
-  db
-    .prepare(
-      `SELECT provider, sku,
-              SUM(CASE WHEN request_id IS NULL THEN 1 ELSE 0 END) AS available,
-              COUNT(*) AS total
-       FROM provider_keys GROUP BY provider, sku ORDER BY sku, provider`,
-    )
-    .all();
+  sql.all(
+    `SELECT provider, sku,
+            CAST(SUM(CASE WHEN request_id IS NULL THEN 1 ELSE 0 END) AS INTEGER) AS available,
+            CAST(COUNT(*) AS INTEGER) AS total
+     FROM provider_keys GROUP BY provider, sku ORDER BY sku, provider`,
+  );
 
-export const refillPool = ({ provider, sku, codes }) => {
-  const insert = db.prepare('INSERT OR IGNORE INTO provider_keys (provider, sku, code) VALUES (?, ?, ?)');
-  return inTransaction(() => {
+export const refillPool = ({ provider, sku, codes }) =>
+  sql.transaction(async () => {
     let added = 0;
-    for (const code of codes) added += insert.run(provider, sku, String(code).trim()).changes;
+    for (const code of codes) {
+      added += await sql.run(
+        'INSERT OR IGNORE INTO provider_keys (provider, sku, code) VALUES (?, ?, ?)',
+        provider, sku, String(code).trim(),
+      );
+    }
     return added;
   });
-};
 
 export const drainPool = ({ sku, provider }) =>
-  inTransaction(() =>
-    db
-      .prepare(
-        `UPDATE provider_keys SET request_id = 'drained_' || id, issued_at = ?
-         WHERE sku = ? AND request_id IS NULL${provider ? ' AND provider = ?' : ''}`,
-      )
-      .run(...[new Date().toISOString(), sku, ...(provider ? [provider] : [])]).changes,
-  );
+  sql.transaction(() =>
+    sql.run(
+      `UPDATE provider_keys SET request_id = 'drained_' || id, issued_at = ?
+       WHERE sku = ? AND request_id IS NULL${provider ? ' AND provider = ?' : ''}`,
+      new Date().toISOString(), sku, ...(provider ? [provider] : []),
+    ));
