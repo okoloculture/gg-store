@@ -64,8 +64,10 @@ const startServer = (env) => {
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'src/server.js'], {
     cwd: root,
     stdio: 'ignore',
-    env: { ...process.env, ...dbEnv, PORT: String(PORT), DELIVERY_LEASE_MS: '2500',
-      RECONCILE_INTERVAL_MS: '1000', LOG_LEVEL: 'error', ...env },
+    // Сервер сценария поднимается на своём порту: адрес, по которому магазин
+    // ходит в собственные заглушки поставщиков, должен указывать на него же.
+    env: { ...process.env, ...dbEnv, PORT: String(PORT), PUBLIC_BASE_URL: BASE,
+      DELIVERY_LEASE_MS: '2500', RECONCILE_INTERVAL_MS: '1000', LOG_LEVEL: 'error', ...env },
   });
   return child;
 };

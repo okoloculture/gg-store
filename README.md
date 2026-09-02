@@ -68,12 +68,13 @@ npm run race:stock        # пустой пул -> восстановление 
 npm run race:promo        # 40 параллельных применений промокода с лимитом 3
 npm run race:restart      # SIGKILL посреди выдачи и восстановление после перезапуска
 npm test                  # 15 юнит-тестов на отдельной БД (data/test.db)
-npm run test:pg           # те же тесты на PostgreSQL (см. .env.test.pg)
+npm run test:pg           # те же тесты на PostgreSQL (createdb gg_store_test, см. .env.test.pg)
 ```
 
 Параметры: `PARALLEL=200 npm run acceptance`, `CLICKS=50 npm run race:buy`,
 `STORM=40 npm run race:timeout`. Сценарий `race:restart` поднимает и убивает
-собственный сервер на порту 3299 и отдельной БД, запущенный сервер ему не нужен.
+собственный сервер на порту 3299 и отдельной БД, запущенный сервер ему не нужен
+(на Postgres — база с суффиксом `_restart`, `createdb gg_store_restart`).
 
 ### Что именно проверяет `npm run acceptance`
 
