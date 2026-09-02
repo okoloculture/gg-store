@@ -12,7 +12,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  */
 const buildDriver = async () => {
   if (config.dbDriver === 'postgres') {
-    if (!config.databaseUrl) throw new Error('DB_DRIVER=postgres требует DATABASE_URL');
+    if (!config.databaseUrl) {
+      throw new Error('Не задан DATABASE_URL: без него postgres-драйверу некуда подключаться');
+    }
     const { createPostgresDriver } = await import('./drivers/postgres.js');
     return createPostgresDriver({
       connectionString: config.databaseUrl,

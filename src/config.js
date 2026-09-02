@@ -8,6 +8,10 @@ const num = (value, fallback) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+// Диска под SQLite на serverless не существует: молчаливый откат на него даёт
+// невнятный ENOENT из глубины драйвера вместо понятной причины.
+const isServerless = process.env.VERCEL === '1' || process.env.SERVERLESS === '1';
+
 export const config = {
   rootDir,
   publicDir: path.join(rootDir, 'public'),
@@ -18,7 +22,7 @@ export const config = {
 
   // sqlite — локальная разработка и тесты (нулевая настройка),
   // postgres — деплой на Vercel, где локального диска нет.
-  dbDriver: (process.env.DB_DRIVER ?? (process.env.DATABASE_URL ? 'postgres' : 'sqlite')).toLowerCase(),
+  dbDriver: (process.env.DB_DRIVER ?? (isServerless || process.env.DATABASE_URL ? 'postgres' : 'sqlite')).toLowerCase(),
   dbPath: process.env.DB_PATH ?? path.join(rootDir, 'data', 'store.db'),
   databaseUrl: process.env.DATABASE_URL ?? null,
   pgMaxConnections: num(process.env.PG_MAX_CONNECTIONS, 5),
@@ -26,7 +30,7 @@ export const config = {
 
   // На serverless фоновой работы после ответа нет: выдачу приходится
   // дожидаться внутри обработчика вебхука.
-  serverless: process.env.VERCEL === '1' || process.env.SERVERLESS === '1',
+  serverless: isServerless,
   publicBaseUrl: process.env.PUBLIC_BASE_URL
     ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null),
   // Сколько опрос статуса ждёт запущенную им же выдачу, прежде чем ответить
