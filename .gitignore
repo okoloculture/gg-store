@@ -7,3 +7,5 @@ data/*.db-wal
 .env
 .env.local
 .env.*.local
+.vercel
+.env*

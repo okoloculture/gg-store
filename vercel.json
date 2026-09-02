@@ -6,10 +6,23 @@
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/provider/(.*)", "destination": "/api/index" }
+    {
+      "source": "/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/provider/(.*)",
+      "destination": "/api/index"
+    }
   ],
   "crons": [
-    { "path": "/api/cron/reconcile", "schedule": "0 3 * * *" }
+    {
+      "path": "/api/cron/reconcile",
+      "schedule": "0 3 * * *"
+    }
   ]
 }
